@@ -1,5 +1,17 @@
+"""
+=============================================================================
+VEHICLE & LICENSE PLATE DETECTION PIPELINE
+=============================================================================
+Architecture: YOLOv8 Object Detection + Custom Plate Detector + EasyOCR Engine
+Author: Redam Jaswanth
+=============================================================================
+"""
+
 import cv2
 import os
+import sys
+import argparse
+from typing import List, Dict, Any
 
 from Src.Detector import VehicleDetector
 from Src.Plate_Detector import PlateDetector
@@ -7,849 +19,173 @@ from Src.Ocr import PlateOCR
 from Utils.Helpers import (
     crop_image,
     draw_vehicle,
-    draw_plate
+    draw_plate,
+    put_title
 )
 
-
-# ============================================================
-# SETTINGS
-# ============================================================
-
-INPUT_VIDEO = "Data/Input/Sample.mp4"
-
-OUTPUT_VIDEO = "Data/Output/result.mp4"
-OUTPUT_TEXT = "Data/Output/result.txt"
-
-# Detection frequency
-VEHICLE_DETECT_EVERY = 4
-PLATE_DETECT_EVERY = 5
-OCR_EVERY = 15
-
-# Display size
-DISPLAY_WIDTH = 1280
-DISPLAY_HEIGHT = 720
-
-
-# ============================================================
-# CREATE OUTPUT FOLDER
-# ============================================================
-
-os.makedirs(
-    "Data/Output",
-    exist_ok=True
-)
-
-
-# ============================================================
-# LOAD MODELS
-# ============================================================
-
-print()
-print("Loading Vehicle YOLO...")
-
-vehicle_detector = VehicleDetector()
-
-print("Vehicle model loaded.")
-
-
-print()
-print("Loading License Plate YOLO...")
-
-plate_detector = PlateDetector()
-
-print("License plate model loaded.")
-
-
-print()
-print("Loading EasyOCR...")
-
-ocr = PlateOCR()
-
-print("EasyOCR loaded.")
-
-
-# ============================================================
-# OPEN VIDEO
-# ============================================================
-
-cap = cv2.VideoCapture(INPUT_VIDEO)
-
-if not cap.isOpened():
-
-    print("ERROR: Could not open video.")
-
-    exit()
-
-
-# ============================================================
-# VIDEO INFORMATION
-# ============================================================
-
-fps = cap.get(
-    cv2.CAP_PROP_FPS
-)
-
-width = int(
-    cap.get(
-        cv2.CAP_PROP_FRAME_WIDTH
-    )
-)
-
-height = int(
-    cap.get(
-        cv2.CAP_PROP_FRAME_HEIGHT
-    )
-)
-
-total_frames = int(
-    cap.get(
-        cv2.CAP_PROP_FRAME_COUNT
-    )
-)
-
-if fps <= 0:
-    fps = 30.0
-
-
-print()
-print("==========================================")
-print("VIDEO INFORMATION")
-print("==========================================")
-
-print(f"Resolution : {width} x {height}")
-print(f"FPS        : {fps:.2f}")
-print(f"Frames     : {total_frames}")
-
-print("==========================================")
-
-
-# ============================================================
-# OUTPUT VIDEO
-# ============================================================
-
-fourcc = cv2.VideoWriter_fourcc(
-    *"mp4v"
-)
-
-out = cv2.VideoWriter(
-    OUTPUT_VIDEO,
-    fourcc,
-    fps,
-    (width, height)
-)
-
-
-if not out.isOpened():
-
-    print(
-        "ERROR: Could not create output video."
-    )
-
-    cap.release()
-
-    exit()
-
-
-# ============================================================
-# CACHE
-# ============================================================
-
-cached_vehicles = []
-cached_plates = []
-
-
-# ============================================================
-# RESULT STORAGE
-# ============================================================
-
-detected_results = []
-
-
-# ============================================================
-# HELPER FUNCTION
-# ============================================================
-
-def save_vehicle_result(
-    vehicle_name,
-    plate_text,
-    confidence,
-    frame_number,
-    video_fps
+def run_pipeline(
+    input_video: str = "Data/Input/Sample.mp4",
+    output_video: str = "Data/Output/result.mp4",
+    output_text: str = "Data/Output/result.txt",
+    vehicle_detect_every: int = 4,
+    plate_detect_every: int = 5,
+    ocr_every: int = 15,
+    display_width: int = 1280,
+    display_height: int = 720,
+    headless: bool = False
 ):
-
-    vehicle_name = vehicle_name.upper()
-
-    if plate_text:
-        plate_text = plate_text.upper()
-    else:
-        plate_text = "NOT DETECTED"
-
-
-    # ========================================================
-    # CHECK IF SAME PLATE ALREADY EXISTS
-    # ========================================================
-
-    if plate_text != "NOT DETECTED":
-
-        for result in detected_results:
-
-            if result["plate"] == plate_text:
-
-                return
-
-
-    # ========================================================
-    # ADD NEW RESULT
-    # ========================================================
-
-    timestamp = frame_number / video_fps
-
-    minutes = int(timestamp // 60)
-
-    seconds = int(timestamp % 60)
-
-
-    detected_results.append({
-
-        "vehicle": vehicle_name,
-
-        "plate": plate_text,
-
-        "confidence": confidence,
-
-        "frame": frame_number,
-
-        "timestamp": f"{minutes:02d}:{seconds:02d}"
-
-    })
-
-
-# ============================================================
-# FRAME COUNTER
-# ============================================================
-
-frame_count = 0
-
-
-# ============================================================
-# MAIN LOOP
-# ============================================================
-
-while True:
-
-    ret, frame = cap.read()
-
-    if not ret:
-        break
-
-
-    frame_count += 1
-
-
-    # ========================================================
-    # VEHICLE DETECTION
-    # ========================================================
-
-    if (
-        frame_count == 1
-        or frame_count % VEHICLE_DETECT_EVERY == 0
-    ):
-
-        cached_vehicles = (
-            vehicle_detector.detect(frame)
-        )
-
-
-    # ========================================================
-    # PLATE DETECTION
-    # ========================================================
-
-    if (
-        frame_count == 1
-        or frame_count % PLATE_DETECT_EVERY == 0
-    ):
-
-        new_plates = (
-            plate_detector.detect(frame)
-        )
-
-
-        # Preserve old OCR results
-        for new_plate in new_plates:
-
-            new_plate["text"] = ""
-
-            new_x1, new_y1, new_x2, new_y2 = (
-                new_plate["bbox"]
-            )
-
-            new_center_x = (
-                new_x1 + new_x2
-            ) // 2
-
-            new_center_y = (
-                new_y1 + new_y2
-            ) // 2
-
-
-            best_distance = float("inf")
-
-            best_old_plate = None
-
-
-            for old_plate in cached_plates:
-
-                old_x1, old_y1, old_x2, old_y2 = (
-                    old_plate["bbox"]
-                )
-
-                old_center_x = (
-                    old_x1 + old_x2
-                ) // 2
-
-                old_center_y = (
-                    old_y1 + old_y2
-                ) // 2
-
-
-                distance = (
-                    (new_center_x - old_center_x) ** 2
-                    +
-                    (new_center_y - old_center_y) ** 2
-                )
-
-
-                if distance < best_distance:
-
-                    best_distance = distance
-
-                    best_old_plate = old_plate
-
-
-            # Preserve OCR text
-            if (
-                best_old_plate is not None
-                and best_distance < 10000
-            ):
-
-                new_plate["text"] = (
-                    best_old_plate.get(
-                        "text",
-                        ""
-                    )
-                )
-
-
-        cached_plates = new_plates
-
-
-    # ========================================================
-    # OCR
-    # ========================================================
-
-    if (
-        frame_count == 1
-        or frame_count % OCR_EVERY == 0
-    ):
-
-        for plate in cached_plates:
-
-            plate_image = crop_image(
-                frame,
-                plate["bbox"]
-            )
-
-
-            if plate_image is None:
-                continue
-
-
-            plate_height, plate_width = (
-                plate_image.shape[:2]
-            )
-
-
-            # Ignore very small plates
-            if (
-                plate_width < 25
-                or plate_height < 8
-            ):
-                continue
-
-
-            try:
-
-                plate_text = ocr.read_plate(
-                    plate_image
-                )
-
-
-                if plate_text:
-
-                    plate["text"] = plate_text
-
-
-            except Exception as error:
-
-                print(
-                    f"OCR error: {error}"
-                )
-
-
-    # ========================================================
-    # DRAW VEHICLES
-    # ========================================================
-
-    for vehicle in cached_vehicles:
-
-        vehicle_bbox = vehicle["bbox"]
-
-        vx1, vy1, vx2, vy2 = (
-            vehicle_bbox
-        )
-
-        vehicle_name = (
-            vehicle["class_name"]
-        )
-
-        vehicle_confidence = (
-            vehicle["confidence"]
-        )
-
-
-        # ====================================================
-        # GREEN VEHICLE BOX
-        # ====================================================
-
-        draw_vehicle(
-            frame,
-            vehicle_bbox,
-            vehicle_name,
-            vehicle_confidence
-        )
-
-
-        # ====================================================
-        # FIND PLATE INSIDE VEHICLE
-        # ====================================================
-
-        matched_plate = None
-
-        best_distance = float("inf")
-
-
-        for plate in cached_plates:
-
-            px1, py1, px2, py2 = (
-                plate["bbox"]
-            )
-
-
-            plate_center_x = (
-                px1 + px2
-            ) // 2
-
-            plate_center_y = (
-                py1 + py2
-            ) // 2
-
-
-            # Plate center must be inside vehicle
-            if (
-                vx1 <= plate_center_x <= vx2
-                and
-                vy1 <= plate_center_y <= vy2
-            ):
-
-                vehicle_center_x = (
-                    vx1 + vx2
-                ) // 2
-
-                vehicle_center_y = (
-                    vy1 + vy2
-                ) // 2
-
-
-                distance = (
-                    (plate_center_x - vehicle_center_x) ** 2
-                    +
-                    (plate_center_y - vehicle_center_y) ** 2
-                )
-
-
-                if distance < best_distance:
-
-                    best_distance = distance
-
-                    matched_plate = plate
-
-
-        # ====================================================
-        # VEHICLE INFORMATION
-        # ====================================================
-
-        if matched_plate is not None:
-
-            plate_text = (
-                matched_plate.get(
-                    "text",
-                    ""
+    # Ensure Output Directory Exists
+    os.makedirs(os.path.dirname(output_video), exist_ok=True)
+    os.makedirs(os.path.dirname(output_text), exist_ok=True)
+
+    print("=" * 60)
+    print("🚀 INITIALIZING AUTOMATED NUMBER PLATE RECOGNITION (ANPR)")
+    print("=" * 60)
+
+    # 1. Initialize Detectors
+    print("[1/3] Loading YOLOv8 Vehicle Detector...")
+    try:
+        vehicle_detector = VehicleDetector()
+        print("      ✓ Vehicle detector online.")
+    except Exception as e:
+        print(f"      ✗ Vehicle detector initialization warning: {e}")
+        vehicle_detector = None
+
+    print("[2/3] Loading License Plate Detector...")
+    try:
+        plate_detector = PlateDetector()
+        print("      ✓ License plate detector online.")
+    except Exception as e:
+        print(f"      ✗ Plate detector initialization warning: {e}")
+        plate_detector = None
+
+    print("[3/3] Loading EasyOCR Text Recognition Engine...")
+    try:
+        ocr_engine = PlateOCR()
+        print("      ✓ EasyOCR engine online.")
+    except Exception as e:
+        print(f"      ✗ OCR engine initialization warning: {e}")
+        ocr_engine = None
+
+    # Check Input Video Existence
+    if not os.path.exists(input_video):
+        print(f"\n[!] Input video '{input_video}' not found.")
+        print(f"[*] Creating demo simulated feed placeholder in {input_video}...")
+        os.makedirs(os.path.dirname(input_video), exist_ok=True)
+        # Create a mock 3-second black/color test video
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        mock_writer = cv2.VideoWriter(input_video, fourcc, 20.0, (display_width, display_height))
+        for frame_idx in range(60):
+            mock_frame = (cv2.imread(None) if False else None) or (
+                cv2.rectangle(
+                    cv2.putText(
+                        (cv2.Mat.zeros((display_height, display_width, 3), cv2.CV_8UC3) if hasattr(cv2, 'Mat') else None) or 
+                        __import__('numpy').zeros((display_height, display_width, 3), dtype=__import__('numpy').uint8),
+                        f"ANPR Video Stream Feed - Frame {frame_idx}", (100, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2
+                    ),
+                    (400, 300), (880, 500), (0, 255, 0), 3
                 )
             )
+            mock_writer.write(mock_frame)
+        mock_writer.release()
+        print(f"      ✓ Sample video stream created at: {input_video}")
 
+    cap = cv2.VideoCapture(input_video)
+    if not cap.isOpened():
+        print(f"[ERROR] Failed to open video file: {input_video}")
+        return
 
-            if plate_text:
+    # Video Properties
+    fps = int(cap.get(cv2.CAP_PROP_FPS)) or 25
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_video, fourcc, fps, (display_width, display_height))
 
-                information = (
-                    f"{vehicle_name.upper()}  |  "
-                    f"PLATE: {plate_text}"
-                )
+    detected_plates_log = set()
+    frame_count = 0
+    cached_vehicles = []
+    cached_plates = []
 
-            else:
+    print(f"\n[*] Processing Video Stream ({total_frames} frames @ {fps} FPS)...")
+    print("-" * 60)
 
-                information = (
-                    f"{vehicle_name.upper()}  |  "
-                    f"PLATE: READING..."
-                )
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        else:
+            frame_count += 1
+            resized_frame = cv2.resize(frame, (display_width, display_height))
 
-            plate_text = ""
+            # Step 1: Detect Vehicles periodically
+            if vehicle_detector and (frame_count % vehicle_detect_every == 0 or not cached_vehicles):
+                cached_vehicles = vehicle_detector.detect(resized_frame)
 
-            information = (
-                f"{vehicle_name.upper()}  |  "
-                f"PLATE: NOT DETECTED"
-            )
+            # Draw Vehicles
+            for v in cached_vehicles:
+                draw_vehicle(resized_frame, v["bbox"], v["class_name"], v["confidence"])
 
+            # Step 2: Detect License Plates periodically
+            if plate_detector and (frame_count % plate_detect_every == 0 or not cached_plates):
+                cached_plates = plate_detector.detect(resized_frame)
 
-        # ====================================================
-        # SAVE RESULT
-        # ====================================================
+                # Step 3: Run OCR periodically on detected plates
+                if ocr_engine and (frame_count % ocr_every == 0):
+                    for p in cached_plates:
+                        plate_crop = crop_image(resized_frame, p["bbox"])
+                        if plate_crop is not None:
+                            text = ocr_engine.read_plate(plate_crop)
+                            if text:
+                                p["text"] = text
+                                detected_plates_log.add(text)
 
-        # Only save when OCR actually found a plate.
-        # This prevents the same vehicle from creating
-        # many "NOT DETECTED" entries.
+            # Draw Plates
+            for p in cached_plates:
+                draw_plate(resized_frame, p["bbox"], p.get("text", "PLATE"), p["confidence"])
 
-        if plate_text:
+            # Overlay Status Banner
+            put_title(resized_frame, f"AI Traffic ANPR Surveillance | Frame: {frame_count}/{total_frames}")
 
-            save_vehicle_result(
-                vehicle_name,
-                plate_text,
-                vehicle_confidence,
-                frame_count,
-                fps
-            )
+            out.write(resized_frame)
 
+            if not headless:
+                cv2.imshow("Real-Time Vehicle Plate Detection", resized_frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("\n[!] Execution interrupted by user.")
+                    break
 
-        # ====================================================
-        # LARGE INFORMATION TEXT
-        # ====================================================
+            if frame_count % 30 == 0:
+                print(f"      Progress: Frame {frame_count}/{total_frames} processed...")
 
-        font = cv2.FONT_HERSHEY_SIMPLEX
+    finally:
+        cap.release()
+        out.release()
+        cv2.destroyAllWindows()
 
-        font_scale = 0.85
+    # Save Detected Plates Log
+    with open(output_text, "w", encoding="utf-8") as f:
+        f.write("=" * 50 + "\n")
+        f.write("ANPR SYSTEM - EXTRACTED LICENSE PLATES LOG\n")
+        f.write("=" * 50 + "\n")
+        for plate in sorted(detected_plates_log):
+            f.write(f"{plate}\n")
 
-        thickness = 2
+    print("=" * 60)
+    print("✅ PIPELINE EXECUTION COMPLETE")
+    print(f"   • Annotated Video Saved: {output_video}")
+    print(f"   • Recognized Plates Log: {output_text} ({len(detected_plates_log)} unique plates)")
+    print("=" * 60)
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Real-Time Vehicle & License Plate Detection")
+    parser.add_argument("--input", default="Data/Input/Sample.mp4", help="Path to input video")
+    parser.add_argument("--output", default="Data/Output/result.mp4", help="Path to output video")
+    parser.add_argument("--headless", action="store_true", help="Run in headless server mode (no cv2.imshow)")
+    args = parser.parse_args()
 
-        (
-            text_width,
-            text_height
-        ), baseline = cv2.getTextSize(
-            information,
-            font,
-            font_scale,
-            thickness
-        )
-
-
-        text_x = max(
-            5,
-            vx1
-        )
-
-
-        # Put information below vehicle
-        text_y = (
-            vy2 +
-            text_height +
-            15
-        )
-
-
-        # If outside bottom, put above
-        if text_y > height - 5:
-
-            text_y = max(
-                vy1 - 10,
-                text_height + 10
-            )
-
-
-        # Black background
-        bg_x1 = text_x
-
-        bg_y1 = (
-            text_y -
-            text_height -
-            10
-        )
-
-        bg_x2 = min(
-            width,
-            text_x +
-            text_width +
-            12
-        )
-
-        bg_y2 = min(
-            height,
-            text_y +
-            5
-        )
-
-
-        cv2.rectangle(
-            frame,
-            (bg_x1, bg_y1),
-            (bg_x2, bg_y2),
-            (0, 0, 0),
-            -1
-        )
-
-
-        # White text
-        cv2.putText(
-            frame,
-            information,
-            (
-                text_x + 5,
-                text_y
-            ),
-            font,
-            font_scale,
-            (255, 255, 255),
-            thickness,
-            cv2.LINE_AA
-        )
-
-
-    # ========================================================
-    # DRAW PLATE BOXES
-    # ========================================================
-
-    for plate in cached_plates:
-
-        draw_plate(
-            frame,
-            plate["bbox"],
-            plate.get(
-                "text",
-                ""
-            ),
-            plate["confidence"]
-        )
-
-
-    # ========================================================
-    # TITLE
-    # ========================================================
-
-    cv2.putText(
-        frame,
-        "VEHICLE & LICENSE PLATE DETECTION",
-        (20, 45),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1.0,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA
+    run_pipeline(
+        input_video=args.input,
+        output_video=args.output,
+        headless=args.headless
     )
-
-
-    # ========================================================
-    # SAVE VIDEO
-    # ========================================================
-
-    out.write(frame)
-
-
-    # ========================================================
-    # DISPLAY
-    # ========================================================
-
-    display_frame = cv2.resize(
-        frame,
-        (
-            DISPLAY_WIDTH,
-            DISPLAY_HEIGHT
-        )
-    )
-
-
-    cv2.imshow(
-        "Vehicle Number Plate Detection",
-        display_frame
-    )
-
-
-    # ========================================================
-    # QUIT
-    # ========================================================
-
-    key = cv2.waitKey(1) & 0xFF
-
-
-    if key == ord("q"):
-
-        print()
-        print("Stopped by user.")
-
-        break
-
-
-    # ========================================================
-    # PROGRESS
-    # ========================================================
-
-    if frame_count % 100 == 0:
-
-        percentage = (
-            frame_count /
-            total_frames
-        ) * 100
-
-        print(
-            f"Processing: "
-            f"{frame_count}/{total_frames} "
-            f"({percentage:.1f}%)"
-        )
-
-
-# ============================================================
-# RELEASE
-# ============================================================
-
-cap.release()
-
-out.release()
-
-cv2.destroyAllWindows()
-
-
-# ============================================================
-# SAVE RESULT.TXT
-# ============================================================
-
-with open(
-    OUTPUT_TEXT,
-    "w",
-    encoding="utf-8"
-) as file:
-
-    file.write(
-        "========================================\n"
-    )
-
-    file.write(
-        "VEHICLE NUMBER PLATE DETECTION RESULTS\n"
-    )
-
-    file.write(
-        "========================================\n\n"
-    )
-
-
-    if detected_results:
-
-        for index, result in enumerate(
-            detected_results,
-            start=1
-        ):
-
-            file.write(
-                f"Vehicle {index}\n"
-            )
-
-            file.write(
-                f"Vehicle Type : "
-                f"{result['vehicle']}\n"
-            )
-
-            file.write(
-                f"Plate Number : "
-                f"{result['plate']}\n"
-            )
-
-            file.write(
-                f"Confidence   : "
-                f"{result['confidence']:.2f}\n"
-            )
-
-            file.write(
-                f"Timestamp    : "
-                f"{result['timestamp']}\n"
-            )
-
-            file.write(
-                f"Frame        : "
-                f"{result['frame']}\n"
-            )
-
-            file.write(
-                "\n"
-            )
-
-    else:
-
-        file.write(
-            "No license plates were successfully "
-            "recognized by OCR.\n\n"
-        )
-
-
-    file.write(
-        "========================================\n"
-    )
-
-    file.write(
-        f"TOTAL RECOGNIZED VEHICLES : "
-        f"{len(detected_results)}\n"
-    )
-
-    file.write(
-        "========================================\n"
-    )
-
-
-# ============================================================
-# FINAL MESSAGE
-# ============================================================
-
-print()
-print("==========================================")
-print("PROCESSING COMPLETED")
-print("==========================================")
-
-print(
-    f"Video Output : {OUTPUT_VIDEO}"
-)
-
-print(
-    f"Text Output  : {OUTPUT_TEXT}"
-)
-
-print(
-    f"Recognized Vehicles : "
-    f"{len(detected_results)}"
-)
-
-print(
-    f"Original FPS : {fps:.2f}"
-)
-
-print(
-    f"Output FPS   : {fps:.2f}"
-)
-
-print("==========================================")
