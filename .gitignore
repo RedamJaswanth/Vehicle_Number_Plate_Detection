@@ -20,15 +20,16 @@ env/
 # Logs
 *.log
 
-# Model weights and generated files
-*.pt
-*.onnx
-runs/
-# Input videos and generated output videos
+# Large media files
 Data/Input/
 Data/Output/
 *.mp4
 *.mov
+*.avi
 
-# Python virtual environment
-.venv/
+# Ignore generic weights but whitelist license plate weights
+*.onnx
+runs/
+Models/yolov8n.pt
+!best.pt
+!Models/license_plate_detector.pt
