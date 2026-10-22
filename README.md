@@ -11,7 +11,7 @@ pinned: false
 
 # 🚗 Vehicle Number Plate Detection & OCR
 
-[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow?style=for-the-badge)](https://huggingface.co/spaces/RedamJaswanth/Vehicle_Number_Plate_Detection)
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow?style=for-the-badge)](https://huggingface.co/spaces/Jaswanth1023/Vehicle_Number_Plate_Detection)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/RedamJaswanth/Vehicle_Number_Plate_Detection)
 
 A computer vision pipeline that detects vehicles and license plates using fine-tuned **Ultralytics YOLOv8** and reads alphanumeric registration numbers using **EasyOCR**, deployed as an interactive **Gradio** web application on CPU.
@@ -19,7 +19,7 @@ A computer vision pipeline that detects vehicles and license plates using fine-t
 ---
 
 ### 🌐 Live Demo
-👉 **[Open Live App on Hugging Face Spaces](https://huggingface.co/spaces/RedamJaswanth/Vehicle_Number_Plate_Detection)**
+👉 **[Open Live App on Hugging Face Spaces](https://huggingface.co/spaces/Jaswanth1023/Vehicle_Number_Plate_Detection)**
 
 ---
 
