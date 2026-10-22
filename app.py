@@ -14,41 +14,41 @@ import easyocr
 from ultralytics import YOLO
 import gradio as gr
 
+try:
+    import spaces
+    has_spaces = True
+except ImportError:
+    has_spaces = False
+    spaces = None
+
 # ── Load Models ─────────────────────────────────────────────────────────────────
-# Locate weights in root (best.pt) or Models directory
 WEIGHT_PATH = "best.pt" if os.path.exists("best.pt") else "Models/license_plate_detector.pt"
 
 print(f"Loading YOLOv8 plate detector from: {WEIGHT_PATH}")
 detector = YOLO(WEIGHT_PATH)
 
-print("Initializing EasyOCR reader (CPU mode)...")
+print("Initializing EasyOCR reader...")
 ocr_reader = easyocr.Reader(["en"], gpu=False)
 
 
 def clean_plate_text(raw_text: str) -> str:
     """Clean and standardize recognized license plate text."""
-    # Retain alphanumeric characters
-    cleaned = "".join(c for c in raw_text if c.isalnum()).upper()
-    return cleaned
+    return "".join(c for c in raw_text if c.isalnum()).upper()
 
 
-def detect_and_recognize(image: np.ndarray, conf_threshold: float = 0.25):
-    """
-    Run YOLOv8 plate detection and EasyOCR recognition on an input image.
-
-    Returns:
-        annotated_image (np.ndarray): Image with drawn bounding boxes and text.
-        results_markdown (str): Formatted summary of detected plates.
-    """
+def _inference_core(image: np.ndarray, conf_threshold: float = 0.25):
     if image is None:
         return None, "Please upload or select an image."
 
-    # Convert RGB to BGR for OpenCV processing
     frame = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     h, w = frame.shape[:2]
 
-    # Run inference
-    results = detector(frame, conf=conf_threshold, device="cpu", verbose=False)
+    # Run inference (YOLO automatically uses GPU if available via ZeroGPU)
+    device = "cuda" if (has_spaces or cv2.cuda.getCudaEnabledDeviceCount() > 0) else "cpu"
+    try:
+        results = detector(frame, conf=conf_threshold, device=device, verbose=False)
+    except Exception:
+        results = detector(frame, conf=conf_threshold, device="cpu", verbose=False)
 
     detected_plates = []
     annotated_frame = frame.copy()
@@ -61,7 +61,6 @@ def detect_and_recognize(image: np.ndarray, conf_threshold: float = 0.25):
             conf = float(box.conf[0])
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
 
-            # Clamp coordinates to image boundaries
             x1 = max(0, x1)
             y1 = max(0, y1)
             x2 = min(w, x2)
@@ -70,19 +69,15 @@ def detect_and_recognize(image: np.ndarray, conf_threshold: float = 0.25):
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            # Crop license plate region
             plate_crop = frame[y1:y2, x1:x2]
 
-            # Run OCR on cropped plate
             ocr_text = ""
             if plate_crop.size > 0:
-                # Preprocess for OCR: grayscale & upscale
                 gray_crop = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
                 gray_crop = cv2.resize(gray_crop, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
                 raw_ocr = ocr_reader.readtext(gray_crop, detail=0, paragraph=False)
                 if raw_ocr:
-                    combined = "".join(raw_ocr)
-                    ocr_text = clean_plate_text(combined)
+                    ocr_text = clean_plate_text("".join(raw_ocr))
 
             display_label = ocr_text if ocr_text else f"Plate ({conf:.2f})"
             detected_plates.append({
@@ -92,10 +87,8 @@ def detect_and_recognize(image: np.ndarray, conf_threshold: float = 0.25):
                 "bbox": f"[{x1}, {y1}, {x2}, {y2}]",
             })
 
-            # Draw bounding box (Vibrant Cyan-Green)
             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 128), 3)
 
-            # Draw background tag for text
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.7
             thickness = 2
@@ -117,10 +110,8 @@ def detect_and_recognize(image: np.ndarray, conf_threshold: float = 0.25):
                 lineType=cv2.LINE_AA,
             )
 
-    # Convert annotated image back to RGB for Gradio display
     annotated_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
 
-    # Build Markdown table
     if detected_plates:
         rows = [
             f"| **#{p['id']}** | **`{p['text']}`** | {p['confidence']} | `{p['bbox']}` |"
@@ -141,6 +132,13 @@ No plate region was detected with sufficient confidence. Try lowering the confid
     return annotated_rgb, summary_md
 
 
+# ZeroGPU decorator when running on Hugging Face ZeroGPU
+if has_spaces and spaces is not None:
+    detect_and_recognize = spaces.GPU(_inference_core)
+else:
+    detect_and_recognize = _inference_core
+
+
 # ── Gradio Interface ────────────────────────────────────────────────────────────
 SAMPLE_DIR = Path("sample_images")
 example_files = [
@@ -154,7 +152,7 @@ with gr.Blocks(title="Vehicle Number Plate Detection & OCR") as demo:
         """
         <div style="text-align: center; margin-bottom: 20px;">
             <h1 style="font-size: 2.2rem; color: #1e3a8a;">🚗 Automatic Vehicle Number Plate Detection & OCR</h1>
-            <p style="font-size: 1.05rem; color: #475569;">Upload a vehicle image to detect license plates with <strong>YOLOv8</strong> and extract text using <strong>EasyOCR</strong> on CPU.</p>
+            <p style="font-size: 1.05rem; color: #475569;">Upload a vehicle image to detect license plates with <strong>YOLOv8</strong> and extract text using <strong>EasyOCR</strong>.</p>
         </div>
         """
     )
